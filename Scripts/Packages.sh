@@ -1,203 +1,80 @@
-#!/usr/bin/env bash
+#!/bin/bash
 
-set -e
+#安装和更新软件包
+UPDATE_PACKAGE() {
+	local PKG_NAME=$1
+	local PKG_REPO=$2
+	local PKG_BRANCH=$3
+	local PKG_SPECIAL=$4
+	local REPO_NAME=$(echo $PKG_REPO | cut -d '/' -f 2)
 
-source /etc/profile
-BASE_PATH=$(cd $(dirname $0) && pwd)
+	rm -rf $(find ../feeds/luci/ ../feeds/packages/ -maxdepth 3 -type d -iname "*$PKG_NAME*" -prune)
 
-REPO_URL=$1
-REPO_BRANCH=$2
-BUILD_DIR=$3
-COMMIT_HASH=$4
+	git clone --depth=1 --single-branch --branch $PKG_BRANCH "https://github.com/$PKG_REPO.git"
 
-FEEDS_CONF="feeds.conf.default"
-GOLANG_REPO="https://github.com/sbwml/packages_lang_golang"
-GOLANG_BRANCH="23.x"
-THEME_SET="argon"
-LAN_ADDR="192.168.1.1"
-
-clone_repo() {
-    if [[ ! -d $BUILD_DIR ]]; then
-        echo $REPO_URL $REPO_BRANCH
-        git clone --depth 1 -b $REPO_BRANCH $REPO_URL $BUILD_DIR
-    fi
+	if [[ $PKG_SPECIAL == "pkg" ]]; then
+		cp -rf $(find ./$REPO_NAME/*/ -maxdepth 3 -type d -iname "*$PKG_NAME*" -prune) ./
+		rm -rf ./$REPO_NAME/
+	elif [[ $PKG_SPECIAL == "name" ]]; then
+		mv -f $REPO_NAME $PKG_NAME
+	fi
 }
 
-clean_up() {
-    cd $BUILD_DIR
-    if [[ -f $BUILD_DIR/.config ]]; then
-        \rm -f $BUILD_DIR/.config
-    fi
-    if [[ -d $BUILD_DIR/tmp ]]; then
-        \rm -rf $BUILD_DIR/tmp
-    fi
-    if [[ -d $BUILD_DIR/logs ]]; then
-        \rm -rf $BUILD_DIR/logs/*
-    fi
+#UPDATE_PACKAGE "包名" "项目地址" "项目分支" "pkg/name，可选，pkg为从大杂烩中单独提取包名插件；name为重命名为包名"
+UPDATE_PACKAGE "argon" "jerrykuku/luci-theme-argon" "master"
+UPDATE_PACKAGE "kucat" "sirpdboy/luci-theme-kucat" "js"
+
+UPDATE_PACKAGE "homeproxy" "VIKINGYFY/homeproxy" "main"
+UPDATE_PACKAGE "mihomo" "morytyann/OpenWrt-mihomo" "main"
+UPDATE_PACKAGE "nekoclash" "Thaolga/luci-app-nekoclash" "main"
+UPDATE_PACKAGE "openclash" "vernesong/OpenClash" "dev" "pkg"
+UPDATE_PACKAGE "passwall" "xiaorouji/openwrt-passwall" "main" "pkg"
+UPDATE_PACKAGE "ssr-plus" "fw876/helloworld" "master"
+
+UPDATE_PACKAGE "luci-app-advancedplus" "VIKINGYFY/luci-app-advancedplus" "main"
+UPDATE_PACKAGE "luci-app-gecoosac" "lwb1978/openwrt-gecoosac" "main"
+UPDATE_PACKAGE "luci-app-tailscale" "asvow/luci-app-tailscale" "main"
+UPDATE_PACKAGE "luci-app-wolplus" "VIKINGYFY/luci-app-wolplus" "main"
+UPDATE_PACKAGE "easytier" "lazyoop/networking-artifact" "main" "pkg"
+UPDATE_PACKAGE "vnt" "lazyoop/networking-artifact" "main" "pkg"
+
+if [[ $WRT_REPO != *"immortalwrt"* ]]; then
+	UPDATE_PACKAGE "qmi-wwan" "immortalwrt/wwan-packages" "master" "pkg"
+fi
+
+#更新软件包版本
+UPDATE_VERSION() {
+	local PKG_NAME=$1
+	local PKG_MARK=${2:-not}
+	local PKG_FILES=$(find ./ ../feeds/packages/ -maxdepth 3 -type f -wholename "*/$PKG_NAME/Makefile")
+
+	echo " "
+
+	if [ -z "$PKG_FILES" ]; then
+		echo "$PKG_NAME not found!"
+		return
+	fi
+
+	echo "$PKG_NAME version update has started!"
+
+	for PKG_FILE in $PKG_FILES; do
+		local PKG_REPO=$(grep -Pho 'PKG_SOURCE_URL:=https://.*github.com/\K[^/]+/[^/]+(?=.*)' $PKG_FILE | head -n 1)
+		local PKG_VER=$(curl -sL "https://api.github.com/repos/$PKG_REPO/releases" | jq -r "map(select(.prerelease|$PKG_MARK)) | first | .tag_name")
+		local NEW_VER=$(echo $PKG_VER | sed "s/.*v//g; s/_/./g")
+		local NEW_HASH=$(curl -sL "https://codeload.github.com/$PKG_REPO/tar.gz/$PKG_VER" | sha256sum | cut -b -64)
+		local OLD_VER=$(grep -Po "PKG_VERSION:=\K.*" "$PKG_FILE")
+
+		echo "$OLD_VER $PKG_VER $NEW_VER $NEW_HASH"
+
+		if [[ $NEW_VER =~ ^[0-9].* ]] && dpkg --compare-versions "$OLD_VER" lt "$NEW_VER"; then
+			sed -i "s/PKG_VERSION:=.*/PKG_VERSION:=$NEW_VER/g" "$PKG_FILE"
+			sed -i "s/PKG_HASH:=.*/PKG_HASH:=$NEW_HASH/g" "$PKG_FILE"
+			echo "$PKG_FILE version has been updated!"
+		else
+			echo "$PKG_FILE version is already the latest!"
+		fi
+	done
 }
 
-reset_feeds_conf() {
-    git checkout $REPO_BRANCH
-    git reset --hard origin/$REPO_BRANCH
-    git clean -fd
-    git pull origin $REPO_BRANCH
-    if [[ $COMMIT_HASH != "none" ]]; then
-        git checkout $COMMIT_HASH
-    fi
-    #if git status | grep -qE "$FEEDS_CONF$"; then
-    #    git reset HEAD $FEEDS_CONF
-    #    git checkout $FEEDS_CONF
-    #fi
-}
-
-update_feeds() {
-    sed -i '/^#/d' $BUILD_DIR/$FEEDS_CONF
-    if ! grep -q "small-package" $BUILD_DIR/$FEEDS_CONF; then
-        echo "src-git small8 https://github.com/kenzok8/small-package" >> $BUILD_DIR/$FEEDS_CONF
-    fi
-    ./scripts/feeds clean
-    ./scripts/feeds update -a
-}
-
-remove_unwanted_packages() {
-    local luci_packages=(
-        "luci-app-passwall" "luci-app-smartdns" "luci-app-ddns-go" "luci-app-rclone"
-        "luci-app-ssr-plus" "luci-app-vssr" "luci-theme-argon" "luci-app-daed" "luci-app-dae"
-        "luci-app-alist" "luci-app-argon-config" "luci-app-homeproxy" "luci-app-haproxy-tcp"
-        "luci-app-openclash"
-    )
-    local packages_net=(
-        "haproxy" "xray-core" "xray-plugin" "dns2tcp" "dns2socks" "alist" "hysteria"
-        "smartdns" "mosdns" "adguardhome" "ddns-go" "naiveproxy" "shadowsocks-rust"
-        "sing-box" "v2ray-core" "v2ray-geodata" "v2ray-plugin" "tuic-client"
-        "chinadns-ng" "ipt2socks" "tcping" "trojan-plus" "simple-obfs"
-        "shadowsocksr-libev" "dae" "daed"
-    )
-    local small8_packages=(
-        "ppp" "firewall" "dae" "daed" "daed-next" "libnftnl" "nftables" "dnsmasq"
-    )
-
-    for pkg in "${luci_packages[@]}"; do
-        \rm -rf ./feeds/luci/applications/$pkg
-        \rm -rf ./feeds/luci/themes/$pkg
-    done
-
-    for pkg in "${packages_net[@]}"; do
-        \rm -rf ./feeds/packages/net/$pkg
-    done
-
-    for pkg in "${small8_packages[@]}"; do
-        \rm -rf ./feeds/small8/$pkg
-    done
-
-    if [[ -d ./package/istore ]]; then
-        \rm -rf ./package/istore
-    fi
-}
-
-update_golang() {
-    if [[ -d ./feeds/packages/lang/golang ]]; then
-        \rm -rf ./feeds/packages/lang/golang
-        git clone $GOLANG_REPO -b $GOLANG_BRANCH ./feeds/packages/lang/golang
-    fi
-}
-
-install_small8() {
-    ./scripts/feeds install -p small8 -f xray-core xray-plugin dns2tcp dns2socks haproxy hysteria naiveproxy \
-        shadowsocks-rust sing-box v2ray-core v2ray-geodata v2ray-plugin tuic-client chinadns-ng ipt2socks tcping \
-        trojan-plus simple-obfs shadowsocksr-libev luci-app-passwall alist luci-app-alist smartdns luci-app-smartdns \
-        v2dat mosdns luci-app-mosdns adguardhome luci-app-adguardhome ddns-go luci-app-ddns-go taskd luci-lib-xterm \
-        luci-lib-taskd luci-app-store quickstart luci-app-quickstart luci-app-istorex luci-app-cloudflarespeedtest \
-        luci-theme-argon netdata luci-app-netdata lucky luci-app-lucky luci-app-openclash
-}
-
-install_feeds() {
-    ./scripts/feeds update -i
-    for dir in $BUILD_DIR/feeds/*; do
-        # 检查是否为目录并且不以 .tmp 结尾，并且不是软链接
-        if [ -d "$dir" ] && [[ ! "$dir" == *.tmp ]] && [ ! -L "$dir" ]; then
-            if [[ $(basename "$dir") == "small8" ]]; then
-                install_small8
-            else
-                ./scripts/feeds install -f -ap $(basename "$dir")
-            fi
-        fi
-    done
-}
-
-fix_default_set() {
-    #修改默认主题
-    sed -i "s/luci-theme-bootstrap/luci-theme-$THEME_SET/g" $(find ./feeds/luci/collections/ -type f -name "Makefile")
-
-    if [[ -f ./package/emortal/autocore/files/tempinfo ]]; then
-        if [[ -f $BASE_PATH/patches/tempinfo ]]; then
-            \cp -f $BASE_PATH/patches/tempinfo ./package/emortal/autocore/files/tempinfo
-        fi
-    fi
-}
-
-fix_miniupmpd() {
-    local PKG_HASH=$(awk -F"=" '/^PKG_HASH:/ {print $2}' ./feeds/packages/net/miniupnpd/Makefile)
-    if [[ $PKG_HASH == "fbdd5501039730f04a8420ea2f8f54b7df63f9f04cde2dc67fa7371e80477bbe" ]]; then
-        if [[ -f $BASE_PATH/patches/400-fix_nft_miniupnp.patch ]]; then
-            if [[ ! -d ./feeds/packages/net/miniupnpd/patches ]]; then
-                mkdir -p ./feeds/packages/net/miniupnpd/patches
-            fi
-            \cp -f $BASE_PATH/patches/400-fix_nft_miniupnp.patch ./feeds/packages/net/miniupnpd/patches/
-        fi
-    fi
-}
-
-change_dnsmasq2full() {
-    if ! grep -q "dnsmasq-full" $BUILD_DIR/include/target.mk; then
-        sed -i 's/dnsmasq/dnsmasq-full/g' ./include/target.mk
-    fi
-}
-
-chk_fullconenat() {
-    if [ ! -d $BUILD_DIR/package/network/utils/fullconenat-nft ]; then
-        \cp -rf $BASE_PATH/fullconenat/fullconenat-nft $BUILD_DIR/package/network/utils
-    fi
-    if [ ! -d $BUILD_DIR/package/network/utils/fullconenat ]; then
-        \cp -rf $BASE_PATH/fullconenat/fullconenat $BUILD_DIR/package/network/utils
-    fi
-}
-
-fix_mk_def_depends() {
-    sed -i 's/libustream-mbedtls/libustream-openssl/g' $BUILD_DIR/include/target.mk 2>/dev/null
-    if [ -f $BUILD_DIR/target/linux/qualcommax/Makefile ]; then
-        sed -i 's/wpad-basic-mbedtls/wpad-openssl/g' $BUILD_DIR/target/linux/qualcommax/Makefile
-    fi
-}
-
-add_wifi_default_set() {
-    if [ -d $BUILD_DIR/package/base-files/files/etc/uci-defaults ]; then
-        \cp -f $BASE_PATH/patches/992_set-wifi-uci.sh $BUILD_DIR/package/base-files/files/etc/uci-defaults
-    fi
-}
-
-update_default_lan_addr() {
-    local CFG_PATH="$BUILD_DIR/package/base-files/files/bin/config_generate"
-    if [ -f $CFG_PATH ]; then
-        sed -i 's/192\.168\.[0-9]*\.[0-9]*/'$LAN_ADDR'/g' $CFG_PATH
-    fi
-}
-
-main() {
-    clone_repo
-    clean_up
-    reset_feeds_conf
-    update_feeds
-    remove_unwanted_packages
-    fix_default_set
-    fix_miniupmpd
-    update_golang
-    change_dnsmasq2full
-    chk_fullconenat
-    fix_mk_def_depends
-    add_wifi_default_set
-    update_default_lan_addr
-    install_feeds
-}
-
-main "$@"
+#UPDATE_VERSION "软件包名" "测试版，true，可选，默认为否"
+UPDATE_VERSION "sing-box" "true"
