@@ -19,14 +19,7 @@ UPDATE_PACKAGE() {
 		mv -f $REPO_NAME $PKG_NAME
 	fi
 }
-update_feeds() {
-    sed -i '/^#/d' $BUILD_DIR/$FEEDS_CONF
-    if ! grep -q "small-package" $BUILD_DIR/$FEEDS_CONF; then
-        echo "src-git small8 https://github.com/kenzok8/small-package" >> $BUILD_DIR/$FEEDS_CONF
-    fi
-    ./scripts/feeds clean
-    ./scripts/feeds update -a
-}
+
 #UPDATE_PACKAGE "包名" "项目地址" "项目分支" "pkg/name，可选，pkg为从大杂烩中单独提取包名插件；name为重命名为包名"
 UPDATE_PACKAGE "argon" "jerrykuku/luci-theme-argon" "master"
 UPDATE_PACKAGE "kucat" "sirpdboy/luci-theme-kucat" "js"
@@ -45,9 +38,17 @@ UPDATE_PACKAGE "luci-app-wolplus" "VIKINGYFY/luci-app-wolplus" "main"
 UPDATE_PACKAGE "easytier" "lazyoop/networking-artifact" "main" "pkg"
 UPDATE_PACKAGE "vnt" "lazyoop/networking-artifact" "main" "pkg"
 
-if [[ $WRT_REPO != *"immortalwrt"* ]]; then
-	UPDATE_PACKAGE "qmi-wwan" "immortalwrt/wwan-packages" "master" "pkg"
-fi
+update_feeds() {
+    sed -i '/^#/d' $BUILD_DIR/$FEEDS_CONF
+    if ! grep -q "small-package" $BUILD_DIR/$FEEDS_CONF; then
+        echo "src-git small8 https://github.com/kenzok8/small-package" >> $BUILD_DIR/$FEEDS_CONF
+    fi
+    ./scripts/feeds clean
+    ./scripts/feeds update -a
+}
+#if [[ $WRT_REPO != *"immortalwrt"* ]]; then
+#	UPDATE_PACKAGE "qmi-wwan" "immortalwrt/wwan-packages" "master" "pkg"
+#fi
 
 #更新软件包版本
 UPDATE_VERSION() {
