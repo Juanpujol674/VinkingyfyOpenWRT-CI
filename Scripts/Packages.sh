@@ -37,18 +37,21 @@ UPDATE_PACKAGE "luci-app-tailscale" "asvow/luci-app-tailscale" "main"
 UPDATE_PACKAGE "luci-app-wolplus" "VIKINGYFY/luci-app-wolplus" "main"
 UPDATE_PACKAGE "easytier" "lazyoop/networking-artifact" "main" "pkg"
 UPDATE_PACKAGE "vnt" "lazyoop/networking-artifact" "main" "pkg"
+UPDATE_PACKAGE "luci-app-adguardhome" "rufengsuixing/luci-app-adguardhome" "master"
+UPDATE_PACKAGE "luci-app-unblockmusic" "maxlicheng/luci-app-unblockmusic" "master" "pkg"
 
-update_feeds() {
-    sed -i '/^#/d' $BUILD_DIR/$FEEDS_CONF
-    if ! grep -q "small-package" $BUILD_DIR/$FEEDS_CONF; then
+
+#update_feeds() {
+#    sed -i '/^#/d' $BUILD_DIR/$FEEDS_CONF
+#    if ! grep -q "small-package" $BUILD_DIR/$FEEDS_CONF; then
         echo "src-git small8 https://github.com/kenzok8/small-package" >> $BUILD_DIR/$FEEDS_CONF
-    fi
-    ./scripts/feeds clean
-    ./scripts/feeds update -a
-}
-#if [[ $WRT_REPO != *"immortalwrt"* ]]; then
-#	UPDATE_PACKAGE "qmi-wwan" "immortalwrt/wwan-packages" "master" "pkg"
-#fi
+#    fi
+#    ./scripts/feeds clean
+#    ./scripts/feeds update -a
+#}
+if [[ $WRT_REPO != *"immortalwrt"* ]]; then
+	UPDATE_PACKAGE "qmi-wwan" "immortalwrt/wwan-packages" "master" "pkg"
+fi
 
 #更新软件包版本
 UPDATE_VERSION() {
